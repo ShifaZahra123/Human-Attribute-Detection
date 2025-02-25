@@ -1,53 +1,96 @@
+from dotenv import load_dotenv
 import streamlit as st
-import google.generativeai as genai
 import os
-from PIL import Image  # Correct Import
+import google.generativeai as genai
+from PIL import Image
 
-# Set API Key for Google Gemini
-os.environ["GOOGLE_API_KEY"] = "your_api_key"
-genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
+# Load environment variables
+load_dotenv()
 
-# Load the Gemini Model
-model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
+# Configure Google Gemini API
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# Function to analyze human attributes
-def analyze_human_attributes(image):
-    prompt = """
-    You are an AI trained to analyze human attributes from images with high accuracy. 
-    Carefully analyze the given image and return the following structured details:
+def upload_to_gemini(file_path, mime_type=None):
+    """Uploads the given file to Gemini and returns the file object."""
+    file = genai.upload_file(path=file_path, mime_type=mime_type)
+    st.write(f"Uploaded file '{file.display_name}' as: {file.uri}")
+    return file
 
-    - **Gender** (Male/Female/Non-binary)
-    - **Age Estimate** (e.g., 25 years)
-    - **Ethnicity** (e.g., Asian, Caucasian, African, etc.)
-    - **Mood** (e.g., Happy, Sad, Neutral, Excited)
-    - **Facial Expression** (e.g., Smiling, Frowning, Neutral, etc.)
-    - **Glasses** (Yes/No)
-    - **Beard** (Yes/No)
-    - **Hair Color** (e.g., Black, Blonde, Brown)
-    - **Eye Color** (e.g., Blue, Green, Brown)
-    - **Headwear** (Yes/No, specify type if applicable)
-    - **Emotions Detected** (e.g., Joyful, Focused, Angry, etc.)
-    - **Confidence Level** (Accuracy of prediction in percentage)
-    """
-    response = model.generate_content([prompt, image])
-    return response.text.strip()
+def get_gemini_response(file, prompt):
+    """Generates a response from the Gemini model using the uploaded image and prompt."""
+    generation_config = {
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "top_k": 50,
+        "max_output_tokens": 1024,
+        "response_mime_type": "text/plain",
+    }
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        generation_config=generation_config
+    )
+
+    chat_session = model.start_chat(
+        history=[
+            {
+                "role": "user",
+                "parts": [
+                    file,  # Image file part
+                    prompt  # Text prompt part
+                ],
+            },
+        ]
+    )
+    response = chat_session.send_message(prompt)
+    return response.text
 
 # Streamlit App
-st.title("Human Attribute Detection")
-st.write("Upload an image to detect human attributes with AI.")
+st.set_page_config(page_title="Human Attribute Detector")
+st.header("Human Attribute Detector")
 
-# Image Upload
-uploaded_image = st.file_uploader("Upload an Image", type=['png', 'jpg', 'jpeg'])
+input_prompt = """
+You are an AI trained to analyze human attributes from images with high accuracy. Analyze the uploaded image and return structured details in this format:
 
-if uploaded_image:
-    img = Image.open(uploaded_image)  # Corrected usage
-    person_info = analyze_human_attributes(img)
+1. **Gender**: Male / Female / Non-binary
+2. **Age Estimate**: (e.g., 25 years)
+3. **Ethnicity**: (e.g., Asian, Caucasian, African, etc.)
+4. **Mood**: (e.g., Happy, Sad, Neutral)
+5. **Facial Expression**: (e.g., Smiling, Frowning, Neutral)
+6. **Glasses**: Yes / No
+7. **Beard**: Yes / No
+8. **Hair Color**: (e.g., Black, Blonde, Brown)
+9. **Eye Color**: (e.g., Blue, Green, Brown)
+10. **Headwear**: Yes / No (Specify type if applicable)
+11. **Emotions Detected**: (e.g., Joyful, Focused, Angry)
+12. **Confidence Level**: Accuracy of prediction in percentage
 
-    # Create two columns for side-by-side display
-    col1, col2 = st.columns(2)
+Ensure all attributes are provided based on the image without any apologies.
+"""
 
-    with col1:
-        st.image(img, caption="Uploaded Image", use_container_width=True)  # ✅ Corrected
+# File uploader
+uploaded_file = st.file_uploader("Upload an image...", type=["jpg", "jpeg", "png"])
+if uploaded_file is not None:
+    image = Image.open(uploaded_file)
+    st.image(image, caption="Uploaded Image.", use_column_width=True)
 
-    with col2:
-        st.write(person_info)
+submit = st.button("Analyze Attributes")
+
+# Handle submit button click
+if submit:
+    if uploaded_file is not None:
+        temp_dir = "temp"
+        os.makedirs(temp_dir, exist_ok=True)
+
+        temp_path = os.path.join(temp_dir, uploaded_file.name)
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        file = upload_to_gemini(temp_path, mime_type=uploaded_file.type)
+        response = get_gemini_response(file, input_prompt)
+        
+        st.subheader("Analysis Result")
+        st.write(response)
+        
+        os.remove(temp_path)
+    else:
+        st.error("Please upload an image first.")
